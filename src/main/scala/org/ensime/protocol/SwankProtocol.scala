@@ -2730,6 +2730,13 @@ trait SwankProtocol extends Protocol {
 
   def toWF(value: IndexSearchResult): SExp = {
     value match {
+      case value: SymbolSearchResult => {
+        SExp.propList(
+          (":name", value.name),
+          (":local-name", value.localName),
+          (":decl-as", value.declaredAs),
+          (":pos", toWF(value.pos)))
+      }
       case value: TypeSearchResult => {
         SExp.propList(
           (":name", value.name),
@@ -2746,7 +2753,7 @@ trait SwankProtocol extends Protocol {
           (":owner-name", value.owner))
       }
       case value => throw new IllegalStateException(
-        "Unknown SymbolSearchResult: " + value)
+        "Unknown IndexSearchResult: " + value)
     }
 
   }

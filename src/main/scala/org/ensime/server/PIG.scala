@@ -155,14 +155,18 @@ trait PIGIndex extends StringSimilarity {
   }
 
   private def executeQuery(
-      db: GraphDatabaseService, q: String): ExecutionResult = {
+    db: GraphDatabaseService, q: String): ExecutionResult = {
     val engine = new ExecutionEngine(graphDb)
     engine.execute(q)
   }
 
   // Find all types with names similar to typeName.
-  def findTypeSuggestions(db: GraphDatabaseService,
-    typeName:String, maxResults: Int): Iterable[TypeSearchResult] = {
+  def findTypeSuggestions(
+    db: GraphDatabaseService,
+    typeName:String,
+    maxResults: Int,
+    enclosingPackage: Option[String]
+  ): Iterable[TypeSearchResult] = {
     val keys = Tokens.splitTypeName(typeName).
       filter(!_.isEmpty).map(_.toLowerCase)
     val luceneQuery = keys.map("nameTokens:" + _).mkString(" OR ")
@@ -177,9 +181,14 @@ trait PIGIndex extends StringSimilarity {
           val tpe = SymbolNode(tpeNode)
           val file = FileNode(fileNode)
           val pack = PackageNode(packNode)
-          Some(TypeSearchResult(
+          val result = TypeSearchResult(
             pack.name + "." + tpe.name, tpe.localName, tpe.declaredAs,
-            Some((file.path, tpe.offset))))
+            Some((file.path, tpe.offset)))
+          enclosingPackage match {
+            case Some(requiredPack) if requiredPack == pack.name => Some(result)
+            case None => Some(result)
+            case _ => None
+          }
         }
         case _ => None
       }
@@ -197,7 +206,7 @@ trait PIGIndex extends StringSimilarity {
 
   // Find all occurances of a particular token.
   def findOccurences(db: GraphDatabaseService,
-      name:String, maxResults: Int): Iterable[IndexSearchResult] = {
+    name:String, maxResults: Int): Iterable[IndexSearchResult] = {
     val luceneQuery = "nameTokens:" + name.toLowerCase
     val result = executeQuery(db, s"""START n=node:scopeIndex('$luceneQuery')
                     MATCH n-[:containedBy*1..5]->x
@@ -217,10 +226,61 @@ trait PIGIndex extends StringSimilarity {
     }.toIterable
   }
 
+  // Find all occurances of a particular token.
+  def searchByKeywords(db: GraphDatabaseService,
+    keysIn: List[String],
+    maxResults: Int): Iterable[IndexSearchResult] = {
+    val keys = keysIn.filter(!_.isEmpty).map(_.toLowerCase)
+    val luceneQuery = keys.map{ k => s"nameTokens: $k*" }.mkString(" OR ")
+    val result = executeQuery(
+      db, s"""START n=node:scopeIndex('$luceneQuery')
+              MATCH n-[:containedBy*1..5]->x, n-[:containedBy*1..5]->y
+              WHERE x.nodeType='file' and y.nodeType='package'
+              RETURN n,x,y LIMIT $maxResults""")
+    result.flatMap { row =>
+      (row.get("n"), row.get("x"), row.get("y")) match {
+        case (Some(tpeNode:Node), Some(fileNode:Node), Some(packNode:Node)) => {
+          val tpe = SymbolNode(tpeNode)
+          val file = FileNode(fileNode)
+          val pack = PackageNode(packNode)
+          Some(SymbolSearchResult(
+            pack.name + "." + tpe.name, tpe.localName, tpe.declaredAs,
+            Some((file.path, tpe.offset))))
+        }
+        case _ => None
+      }
+    }.toIterable
+  }
+
+  // Find all occurances of a particular token.
+  def completeTypeName(
+    db: GraphDatabaseService,
+    prefix:String,
+    maxResults: Int): Iterable[IndexSearchResult] = {
+    findTypeSuggestions(db, prefix, maxResults, None)
+  }
+
+  // Find all occurances of a particular token.
+  def sourceFilesDefiningType(
+    db: GraphDatabaseService,
+    enclosingPackage:String,
+    classNamePrefix: String): Set[File] = {
+    findTypeSuggestions(
+      db, classNamePrefix, 100, Some(enclosingPackage)).flatMap{
+      s => s.pos.map{p => new File(p._1)}
+    }.toSet
+  }
+
   private def findFileNodeByMd5(
-      db: GraphDatabaseService, md5: String): Option[FileNode] = {
+    db: GraphDatabaseService, md5: String): Option[FileNode] = {
     JavaConversions.iterableAsScalaIterable(
       fileIndex.get(PropMd5, md5)).headOption.map(FileNode.apply)
+  }
+
+  private def findFileNodeByPath(
+    db: GraphDatabaseService, path: String): Option[FileNode] = {
+    JavaConversions.iterableAsScalaIterable(
+      fileIndex.get(PropPath,path)).headOption.map(FileNode.apply)
   }
 
   private def findOrCreateFileNode(tx: DbInTransaction, f: File): FileNode = {
@@ -263,7 +323,7 @@ trait PIGIndex extends StringSimilarity {
   }
 
   private def prepareFileForNewContents(
-      tx: DbInTransaction, fileNode: FileNode, md5:String): Node = {
+    tx: DbInTransaction, fileNode: FileNode, md5:String): Node = {
     fileNode.md5.foreach { md5 =>
       // File had prior existence. Purge the file from the graph.
       fileIndex.remove(fileNode, PropMd5, md5)
@@ -452,6 +512,20 @@ trait PIGIndex extends StringSimilarity {
     }
   }
 
+  def unindex(files: Set[File]) {
+    doTx { tx =>
+      files.foreach { f =>
+        findFileNodeByPath(tx.db, f.getAbsolutePath) match {
+          case Some(fileNode) => {
+            purgeFileSubgraph(tx, fileNode)
+            fileNode.delete()
+          }
+          case _ => {}
+        }
+      }
+    }
+  }
+
   def index(files: Set[File]) {
     val MaxCompilers = 5
     val MaxWorkers = 5
@@ -498,92 +572,6 @@ trait PIGIndex extends StringSimilarity {
     index(FileUtils.expandRecursively(
       new File("."), sourceRoots, FileUtils.isValidSourceFile _).toSet)
   }
-
-}
-
-
-case class ShutdownReq()
-
-class PIG(
-  project: Project,
-  protocol: ProtocolConversions,
-  config: ProjectConfig) extends Actor with PIGIndex{
-
-  import org.ensime.protocol.ProtocolConst._
-  import protocol._
-
-  var graphDb: GraphDatabaseService = null
-  var fileIndex: Index[Node] = null
-  var tpeIndex: Index[Node] = null
-  var scopeIndex: Index[Node] = null
-  var scalaLibraryJar: File =
-    config.scalaLibraryJar.getOrElse(
-      throw new RuntimeException(
-        "PIG requires that the scala library jar be specified."))
-
-  def act() {
-    val factory = new GraphDatabaseFactory()
-    graphDb = createDefaultGraphDb
-    fileIndex = createDefaultFileIndex(graphDb)
-    tpeIndex = createDefaultTypeIndex(graphDb)
-    scopeIndex = createDefaultScopeIndex(graphDb)
-    indexDirectories(config.sourceRoots)
-    loop {
-      try {
-        receive {
-          case ShutdownReq() => {
-            graphDb.shutdown()
-            exit('stop)
-          }
-          case RPCRequestEvent(req: Any, callId: Int) => {
-            try {
-              req match {
-                case ImportSuggestionsReq(
-                  file: File,
-                  point: Int,
-                  names: List[String],
-                  maxResults: Int) => {
-                  val suggestions = ImportSuggestions(
-                    names.map(findTypeSuggestions(graphDb, _, maxResults)))
-                  project ! RPCResultEvent(toWF(suggestions), callId)
-                }
-                case PublicSymbolSearchReq(
-                  keywords: List[String],
-                  maxResults: Int) => {
-                  //                  val suggestions = SymbolSearchResults()
-                  //                  project ! RPCResultEvent(toWF(suggestions), callId)
-                }
-              }
-            } catch {
-              case e: Exception =>
-                {
-                  System.err.println("Error handling RPC: " +
-                    e + " :\n" + e.getStackTraceString)
-                  project.sendRPCError(ErrExceptionInIndexer,
-                    Some("Error occurred in PIG. Check the server log."),
-                    callId)
-                }
-            }
-          }
-          case other =>
-            {
-              println("PIG: WTF, what's " + other)
-            }
-        }
-
-      } catch {
-        case e: Exception => {
-          System.err.println("Error at PIG message loop: " +
-            e + " :\n" + e.getStackTraceString)
-        }
-      }
-    }
-  }
-
-  override def finalize() {
-    System.out.println("Finalizing Indexer actor.")
-  }
-
 }
 
 object PIG extends PIGIndex {
@@ -596,12 +584,12 @@ object PIG extends PIGIndex {
   def main(args: Array[String]) {
     System.setProperty("actors.corePoolSize", "10")
     System.setProperty("actors.maxPoolSize", "100")
-    Profiling.time {
+    Profiling.time("Index all roots") {
       indexDirectories(args.map(new File(_)))
     }
     Util.foreachInputLine { line =>
       val name = line
-      for (l <- findTypeSuggestions(graphDb, name, 20)) {
+      for (l <- findTypeSuggestions(graphDb, name, 20, None)) {
         println(l)
       }
     }

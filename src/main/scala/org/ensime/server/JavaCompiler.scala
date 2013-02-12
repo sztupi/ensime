@@ -67,7 +67,6 @@ class JavaCompiler(
     private val knownPackages = new mutable.HashSet[String]()
 
     def addClassFiles(classFiles: Iterable[ClassFile]) {
-      val infos = new ArrayBuffer[IndexSearchResult]
       for (cf <- classFiles) {
         val byteStream = new ByteArrayOutputStream()
         byteStream.write(cf.header, 0, cf.headerOffset)
@@ -78,19 +77,6 @@ class JavaCompiler(
         val key = CharOperation.toString(cn)
         compiledClasses(key) = reader
 
-        // Add type to the indexer
-        if (org.ensime.server.Indexer.isValidType(key)) {
-          val localName = if (cn.length > 0) {
-            CharOperation.charToString(cn(cn.length - 1))
-          } else "NA"
-          val pos = Some((CharOperation.charToString(reader.getFileName()), 0))
-          infos += TypeSearchResult(
-            key,
-            localName,
-            'class,
-            pos)
-        }
-
         // Remember package names
         var i = key.indexOf(".")
         while (i > -1) {
@@ -99,7 +85,6 @@ class JavaCompiler(
           i = key.indexOf(".", i + 1);
         }
       }
-      indexer ! AddSymbolsReq(infos)
     }
 
     override def findType(tpe: Array[Char], pkg: Array[Array[Char]]) = {

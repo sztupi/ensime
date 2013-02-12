@@ -204,7 +204,7 @@ class RichPresentationCompiler(
   var indexer: Actor,
   val config: ProjectConfig) extends Global(settings, richReporter)
   with NamespaceTraversal with ModelBuilders with RichCompilerControl
-  with RefactoringImpl with IndexerInterface with SemanticHighlighting with Completion with Helpers {
+  with RefactoringImpl with SemanticHighlighting with Completion with Helpers {
 
   private val symsByFile = new mutable.HashMap[AbstractFile, mutable.LinkedHashSet[Symbol]] {
     override def default(k: AbstractFile) = {
@@ -216,7 +216,6 @@ class RichPresentationCompiler(
 
   override val debugIDE: Boolean = true
   override val verboseIDE: Boolean = true
-  private val newTopLevelSyms = new mutable.LinkedHashSet[Symbol]
 
   def activeUnits(): List[CompilationUnit] = {
     val invalidSet = toBeRemoved.synchronized { toBeRemoved.toSet }
@@ -227,7 +226,6 @@ class RichPresentationCompiler(
   override def registerTopLevelSym(sym: Symbol) {
     super.registerTopLevelSym(sym)
     symsByFile(sym.sourceFile) += sym
-    newTopLevelSyms += sym
   }
 
   /**
@@ -247,22 +245,11 @@ class RichPresentationCompiler(
   /** Remove symbols defined by file that no longer exist. */
   def removeDeleted(f: AbstractFile) {
     val syms = symsByFile(f)
-    unindexTopLevelSyms(syms)
     for (s <- syms) {
       s.owner.info.decls unlink s
     }
     symsByFile.remove(f)
     unitOfFile.remove(f)
-  }
-
-  override def syncTopLevelSyms(unit: RichCompilationUnit) {
-    super.syncTopLevelSyms(unit)
-    unindexTopLevelSyms(deletedTopLevelSyms)
-    indexTopLevelSyms(newTopLevelSyms)
-    //    WARNING: Clearing the set here makes
-    //    recentlyDeleted useless.
-    deletedTopLevelSyms.clear()
-    newTopLevelSyms.clear()
   }
 
   private def typePublicMembers(tpe: Type): Iterable[TypeMember] = {

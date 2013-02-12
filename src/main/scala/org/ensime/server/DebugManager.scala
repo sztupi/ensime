@@ -619,12 +619,6 @@ class DebugManager(project: Project, indexer: Actor,
     private val savedObjects = new HashMap[Long, ObjectReference]()
 
     def start() {
-
-      // Re-index the classfiles on disk so our mappings are up
-      // to date.
-      indexer ! ReindexClassFilesReq(
-        List(config.target, config.testTarget).flatten)
-
       evtQ.start()
       monitor.map { _.start() }
     }
