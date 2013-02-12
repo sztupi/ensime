@@ -31,6 +31,10 @@ import java.io.File
 import org.ensime.config.ProjectConfig
 import org.ensime.indexer.ClassFileIndex
 import org.ensime.indexer.LuceneIndex
+import org.neo4j.graphdb.GraphDatabaseService
+import org.neo4j.graphdb.factory.GraphDatabaseFactory
+import org.neo4j.graphdb.index.Index
+import org.neo4j.graphdb.{Node}
 import org.objectweb.asm.ClassReader
 import org.ensime.model.{
   ImportSuggestions, MethodSearchResult, IndexSearchResult,
@@ -58,22 +62,36 @@ case class CommitReq()
 class Indexer(
   project: Project,
   protocol: ProtocolConversions,
-  config: ProjectConfig) extends Actor {
+  config: ProjectConfig) extends Actor with PIGIndex {
 
   import protocol._
 
-  val index = new LuceneIndex{}
-  val classFileIndex = new ClassFileIndex(config)
+  var graphDb: GraphDatabaseService = null
+  var fileIndex: Index[Node] = null
+  var tpeIndex: Index[Node] = null
+  var scopeIndex: Index[Node] = null
+  var scalaLibraryJar: File =
+    config.scalaLibraryJar.getOrElse(
+      throw new RuntimeException(
+        "Indexer requires that the scala library jar be specified."))
 
   def act() {
+    val factory = new GraphDatabaseFactory()
+    graphDb = createDefaultGraphDb
+    fileIndex = createDefaultFileIndex(graphDb)
+    tpeIndex = createDefaultTypeIndex(graphDb)
+    scopeIndex = createDefaultScopeIndex(graphDb)
+
     loop {
       try {
         receive {
           case IndexerShutdownReq() => {
-            index.close()
+            graphDb.shutdown()
             exit('stop)
           }
           case RebuildStaticIndexReq() => {
+            indexDirectories(config.sourceRoots)
+
             index.initialize(
               config.root,
               config.allFilesOnClasspath,

@@ -79,6 +79,23 @@ trait PIGIndex extends StringSimilarity {
   val PropOffset = "offset"
   val PropDeclaredAs = "declaredAs"
 
+  val NodeTypeFile = "file"
+  val NodeTypePackage = "package"
+  val NodeTypeType = "type"
+  val NodeTypeMethod = "method"
+  val NodeTypeImport = "import"
+  val NodeTypeParam = "param"
+  val NodeTypeVarDef = "varDef"
+  val NodeTypeValDef = "valDef"
+  val NodeTypeVarField = "varField"
+  val NodeTypeValField = "valField"
+
+  val RelMemberOf = DynamicRelationshipType.withName("memberOf")
+  val RelInFile = DynamicRelationshipType.withName("inFile")
+  val RelContainedBy = DynamicRelationshipType.withName("containedBy")
+  val RelParamOf = DynamicRelationshipType.withName("paramOf")
+  val RelFileOf = DynamicRelationshipType.withName("fileOf")
+
   trait RichNode {
     def node: Node
   }
@@ -104,23 +121,6 @@ trait PIGIndex extends StringSimilarity {
 
   case class DbInTransaction(
     db: GraphDatabaseService, transaction: Transaction) {}
-
-  val NodeTypeFile = "file"
-  val NodeTypePackage = "package"
-  val NodeTypeType = "type"
-  val NodeTypeMethod = "method"
-  val NodeTypeImport = "import"
-  val NodeTypeParam = "param"
-  val NodeTypeVarDef = "varDef"
-  val NodeTypeValDef = "valDef"
-  val NodeTypeVarField = "varField"
-  val NodeTypeValField = "valField"
-
-  val RelMemberOf = DynamicRelationshipType.withName("memberOf")
-  val RelInFile = DynamicRelationshipType.withName("inFile")
-  val RelContainedBy = DynamicRelationshipType.withName("containedBy")
-  val RelParamOf = DynamicRelationshipType.withName("paramOf")
-  val RelFileOf = DynamicRelationshipType.withName("fileOf")
 
   protected def graphDb: GraphDatabaseService
   protected def fileIndex: Index[Node]
@@ -227,9 +227,9 @@ trait PIGIndex extends StringSimilarity {
     val fileNode = JavaConversions.iterableAsScalaIterable(
       fileIndex.get(PropPath, f.getAbsolutePath)).headOption
     fileNode match {
-      case Some(node) => new FileNode(node)
+      case Some(node) => FileNode(node)
       case None => {
-        val node = new FileNode(tx.db.createNode())
+        val node = FileNode(tx.db.createNode())
         node.setProperty(PropPath, f.getAbsolutePath)
         node.setProperty(PropNodeType, NodeTypeFile)
         fileIndex.putIfAbsent(node, PropPath, f.getAbsolutePath)
@@ -238,10 +238,23 @@ trait PIGIndex extends StringSimilarity {
     }
   }
 
-  private def purgeFileSubgraph(tx: DbInTransaction, fileNode: Node) = {
-    val path = fileNode.getProperty(PropPath)
+  private def purgeFileSubgraph(tx: DbInTransaction, fileNode: FileNode) = {
+    // First remove the nodes from any indexes
+    executeQuery(tx.db,
+      s"""START n=node:fileIndex($PropPath='${fileNode.path}')
+       MATCH x-[:containedBy*1..5]->n
+       RETURN x""").foreach { row =>
+      row.get("x") match {
+        case Some(x: Node) => {
+          tpeIndex.remove(x)
+          scopeIndex.remove(x)
+        }
+        case _ => None
+      }
+    }
+    // Then delete all nodes and relationships.
     val result = executeQuery(tx.db,
-      s"""START n=node:fileIndex($PropPath='$path')
+      s"""START n=node:fileIndex($PropPath='${fileNode.path}')
        MATCH x-[:containedBy*1..5]->n
        WITH x
        MATCH x-[r]-()
