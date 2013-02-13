@@ -28,19 +28,14 @@
 package org.ensime.server
 
 import java.io.File
-import org.ensime.config.ProjectConfig
 import org.ensime.indexer.Tokens
-import org.ensime.model.ImportSuggestions
-import org.ensime.model.IndexSearchResult
-import org.ensime.model.SymbolSearchResult
-import org.ensime.model.TypeSearchResult
-import org.ensime.protocol.ProtocolConversions
+import org.ensime.model.{
+  IndexSearchResult, SymbolSearchResult, TypeSearchResult}
 import org.ensime.util.{FileUtils, Profiling, StringSimilarity, Util}
-import org.neo4j.cypher.ExecutionEngine
-import org.neo4j.cypher.ExecutionResult
-import org.neo4j.graphdb.Relationship
-import org.neo4j.graphdb.Transaction
-import org.neo4j.graphdb.{DynamicRelationshipType, GraphDatabaseService, Node}
+import org.neo4j.cypher.{ExecutionEngine, ExecutionResult}
+import org.neo4j.graphdb.{
+  DynamicRelationshipType, GraphDatabaseService,
+  Node, Relationship, Transaction}
 import org.neo4j.graphdb.factory.GraphDatabaseFactory
 import org.neo4j.graphdb.index.{Index, IndexHits, IndexManager}
 import org.neo4j.helpers.collection.MapUtil
@@ -73,6 +68,7 @@ trait PIGIndex extends StringSimilarity {
 
   val PropName = "name"
   val PropNameTokens = "nameTokens"
+  val PropQualNameTokens = "qualNameTokens"
   val PropPath = "path"
   val PropMd5 = "md5"
   val PropNodeType = "nodeType"
@@ -231,7 +227,7 @@ trait PIGIndex extends StringSimilarity {
     keysIn: List[String],
     maxResults: Int): Iterable[IndexSearchResult] = {
     val keys = keysIn.filter(!_.isEmpty).map(_.toLowerCase)
-    val luceneQuery = keys.map{ k => s"nameTokens: $k*" }.mkString(" AND ")
+    val luceneQuery = keys.map{ k => s"$PropQualNameTokens: $k*"}.mkString(" AND ")
     val result = executeQuery(
       db, s"""START n=node:tpeIndex('$luceneQuery')
               MATCH n-[:containedBy*1..5]->x, n-[:containedBy*1..5]->y
@@ -365,6 +361,8 @@ trait PIGIndex extends StringSimilarity {
         scopeIndex.add(containingNode, PropNameTokens, tokens.mkString(" "))
       }
 
+      var currentPackage: Option[String] = None
+
       override def traverse(t: Tree) {
         val treeP = t.pos
         if (!treeP.isTransparent) {
@@ -378,7 +376,9 @@ trait PIGIndex extends StringSimilarity {
                 node.setProperty(PropOffset, treeP.startOrPoint)
                 tokenStack.top += fullName.toLowerCase
                 node.createRelationshipTo(stack.top, RelContainedBy)
+                currentPackage = Some(pid.qualifier.toString)
                 descendWithContext(t, node)
+                currentPackage = None
               }
 
               case Import(expr, selectors) => {
@@ -406,6 +406,9 @@ trait PIGIndex extends StringSimilarity {
                 node.createRelationshipTo(stack.top, RelContainedBy)
                 tpeIndex.add(
                   node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
+                currentPackage.foreach{
+                  p => tpeIndex.add(node, PropQualNameTokens,
+                    Tokens.tokenizeCamelCaseName(p + "." + localName))}
                 tokenStack.top += localName
                 descendWithContext(t, node)
               }
@@ -420,6 +423,9 @@ trait PIGIndex extends StringSimilarity {
                 node.createRelationshipTo(stack.top, RelContainedBy)
                 tpeIndex.add(
                   node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
+                currentPackage.foreach{
+                  p => tpeIndex.add(node, PropQualNameTokens,
+                    Tokens.tokenizeCamelCaseName(p + "." + localName))}
                 tokenStack.top += localName
                 descendWithContext(t, node)
               }
