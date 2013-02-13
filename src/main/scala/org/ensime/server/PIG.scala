@@ -231,21 +231,21 @@ trait PIGIndex extends StringSimilarity {
     keysIn: List[String],
     maxResults: Int): Iterable[IndexSearchResult] = {
     val keys = keysIn.filter(!_.isEmpty).map(_.toLowerCase)
-    val luceneQuery = keys.map{ k => s"nameTokens: $k*" }.mkString(" OR ")
+    val luceneQuery = keys.map{ k => s"nameTokens: $k*" }.mkString(" AND ")
     val result = executeQuery(
-      db, s"""START n=node:scopeIndex('$luceneQuery')
+      db, s"""START n=node:tpeIndex('$luceneQuery')
               MATCH n-[:containedBy*1..5]->x, n-[:containedBy*1..5]->y
               WHERE x.nodeType='file' and y.nodeType='package'
               RETURN n,x,y LIMIT $maxResults""")
     result.flatMap { row =>
       (row.get("n"), row.get("x"), row.get("y")) match {
         case (Some(tpeNode:Node), Some(fileNode:Node), Some(packNode:Node)) => {
-          val tpe = SymbolNode(tpeNode)
+          val sym = SymbolNode(tpeNode)
           val file = FileNode(fileNode)
           val pack = PackageNode(packNode)
           Some(SymbolSearchResult(
-            pack.name + "." + tpe.name, tpe.localName, tpe.declaredAs,
-            Some((file.path, tpe.offset))))
+            pack.name + "." + sym.name, sym.localName, sym.declaredAs,
+            Some((file.path, sym.offset))))
         }
         case _ => None
       }
