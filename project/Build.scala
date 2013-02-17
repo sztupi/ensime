@@ -68,7 +68,7 @@ object EnsimeBuild extends Build {
       Seq(
         version := "0.9.8.8",
         organization := "org.ensime",
-        scalaVersion := TwoTenVersion,
+        scalaVersion := TwoNineVersion,
         crossScalaVersions := Seq(TwoNineVersion, TwoTenVersion),
         resolvers <++= (scalaVersion) { scalaVersion =>
           Seq("Scala-Tools Maven2 Snapshots Repository" at "http://scala-tools.org/repo-snapshots",
