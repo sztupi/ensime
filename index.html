@@ -98,7 +98,7 @@
 
 <div class="p"><!----></div>
  
-<center><b>Last Updated</b>: 02/03/2013
+<center><b>Last Updated</b>: 02/17/2013
 </center>
 
 <div class="p"><!----></div>
@@ -1613,7 +1613,7 @@ At the application level, the s-expressions encode RPC calls, RPC responses, and
 
 <div class="p"><!----></div>
      <h3><a name="tth_sEcC.3">
-C.3</a>&nbsp;&nbsp;ENSIME Swank RPC: Version 0.8.4</h3>
+C.3</a>&nbsp;&nbsp;ENSIME Swank RPC: Version 0.8.6</h3>
 
 <div class="p"><!----></div>
       <h4><a name="tth_sEcC.3.1">
@@ -1622,6 +1622,12 @@ C.3.1</a>&nbsp;&nbsp;Protocol Change Log</h4>
 <div class="p"><!----></div>
 
 <pre>
+0.8.6
+&nbsp;&nbsp;Add&nbsp;support&nbsp;for&nbsp;ranges&nbsp;to&nbsp;type-at-point,&nbsp;inspect-type-at-point,
+&nbsp;&nbsp;&nbsp;&nbsp;type-by-name-at-point
+0.8.5
+&nbsp;&nbsp;DebugLocation&nbsp;of&nbsp;type&nbsp;'field&nbsp;now&nbsp;gets&nbsp;field&nbsp;name&nbsp;from&nbsp;:field,&nbsp;not&nbsp;from&nbsp;:name
+&nbsp;&nbsp;The&nbsp;debug-to-string&nbsp;call&nbsp;now&nbsp;requires&nbsp;thread&nbsp;id
 0.8.4
 &nbsp;&nbsp;Add&nbsp;local-name&nbsp;to&nbsp;SymbolInfo
 0.8.3
@@ -3565,7 +3571,7 @@ Lookup a type by name, in a specific source context.<br /><br />
 <pre>
 String:The&nbsp;local&nbsp;or&nbsp;qualified&nbsp;name&nbsp;of&nbsp;the&nbsp;type.
 String:A&nbsp;source&nbsp;filename.
-Int:A&nbsp;character&nbsp;offset&nbsp;in&nbsp;the&nbsp;file.
+Int&nbsp;or&nbsp;(Int,&nbsp;Int):A&nbsp;character&nbsp;offset&nbsp;(or&nbsp;range)&nbsp;in&nbsp;the&nbsp;file.a
 
 </pre>
 </b></dd>
@@ -3625,7 +3631,7 @@ Lookup type of thing at given position.<br /><br />
 
 <pre>
 String:A&nbsp;source&nbsp;filename.
-Int:A&nbsp;character&nbsp;offset&nbsp;in&nbsp;the&nbsp;file.
+Int&nbsp;or&nbsp;(Int,&nbsp;Int):A&nbsp;character&nbsp;offset&nbsp;(or&nbsp;range)&nbsp;in&nbsp;the&nbsp;file.
 
 </pre>
 </b></dd>
@@ -3685,7 +3691,7 @@ Lookup detailed type of thing at given position.<br /><br />
 
 <pre>
 String:A&nbsp;source&nbsp;filename.
-Int:A&nbsp;character&nbsp;offset&nbsp;in&nbsp;the&nbsp;file.
+Int&nbsp;or&nbsp;(Int,&nbsp;Int):A&nbsp;character&nbsp;offset&nbsp;(or&nbsp;range)&nbsp;in&nbsp;the&nbsp;file.
 
 </pre>
 </b></dd>
@@ -5007,6 +5013,7 @@ given location<br /><br />
 	<dd><b>
 
 <pre>
+String:&nbsp;The&nbsp;thread-id&nbsp;in&nbsp;which&nbsp;to&nbsp;call&nbsp;toString.
 DebugLocation:&nbsp;The&nbsp;location&nbsp;from&nbsp;which&nbsp;to&nbsp;load&nbsp;the&nbsp;value.
 
 </pre>
@@ -5031,8 +5038,8 @@ A&nbsp;DebugValue
 	<dd><b>
 
 <pre>
-(:swank-rpc&nbsp;(swank:debug-to-string&nbsp;(:type&nbsp;element
-&nbsp;:object-id&nbsp;"23"&nbsp;:index&nbsp;2))&nbsp;42)
+(:swank-rpc&nbsp;(swank:debug-to-string&nbsp;"thread-2"
+&nbsp;(:type&nbsp;element&nbsp;:object-id&nbsp;"23"&nbsp;:index&nbsp;2))&nbsp;42)
 
 </pre>
 </b></dd>
