@@ -49,6 +49,16 @@ import scala.tools.nsc.interactive.{CompilerControl, Global}
 import scala.tools.nsc.reporters.{Reporter, StoreReporter}
 import scala.tools.nsc.util.SourceFile
 
+//class MyStandardAnalyzer extends Analyzer {
+//  private var actual =
+//    new StandardAnalyzer( Version.LUCENE_31, new java.util.HashSet[String]( Arrays.asList( "just", "some", "words" ) ) )
+//    override def tokenStream( fieldName: String, reader: Reader): TokenStream = {
+//        actual.tokenStream(fieldName, reader)
+//    }
+//}
+//
+//  Index<Node> index = nodeIndex( testname.getMethodName(), stringMap( "analyzer", MyStandardAnalyzer.class.getName() ) );
+
 class RoundRobin[T](items: IndexedSeq[T]) {
   var i = 0
   def next():T = {
@@ -130,13 +140,19 @@ trait PIGIndex extends StringSimilarity {
   protected def createDefaultFileIndex(db: GraphDatabaseService) =
     db.index().forNodes("fileIndex")
 
+  protected def createFullTextIndex(db: GraphDatabaseService, name: String) =
+    db.index().forNodes(name,
+      MapUtil.stringMap(
+        IndexManager.PROVIDER, "lucene",
+        "type", "fulltext",
+        "analyzer", "org.apache.lucene.analysis.SimpleAnalyzer"
+      ))
+
   protected def createDefaultTypeIndex(db: GraphDatabaseService) =
-    db.index().forNodes("tpeIndex",
-      MapUtil.stringMap( IndexManager.PROVIDER, "lucene", "type", "fulltext" ))
+    createFullTextIndex(db, "tpeIndex")
 
   protected def createDefaultScopeIndex(db: GraphDatabaseService) =
-    db.index().forNodes("scopeIndex",
-      MapUtil.stringMap( IndexManager.PROVIDER, "lucene", "type", "fulltext" ))
+    createFullTextIndex(db, "scopeIndex")
 
   protected def shutdown = { graphDb.shutdown }
 

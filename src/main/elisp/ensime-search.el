@@ -369,16 +369,16 @@
 
 	:match-file-name
 	(when-let (pos (ensime-search-sym-pos item))
-	  (ensime-pos-file pos))
+                  (ensime-pos-file pos))
 
 	:match-start
 	(when-let (pos (ensime-search-sym-pos item))
-	  (+ (ensime-pos-offset pos) ensime-ch-fix))
+                  (+ (ensime-pos-offset pos) ensime-ch-fix))
 
 	:match-end nil
 
 	:match-line (when-let (pos (ensime-search-sym-pos item))
-		      (ensime-pos-line pos))
+                              (ensime-pos-line pos))
 
 	:data
 	item
@@ -419,8 +419,8 @@
 
       ;; Insert filename
       (when-let (f (ensime-search-result-match-file-name r))
-	(ensime-insert-with-face (format " %s" f)
-				 'font-lock-comment-face))
+                (ensime-insert-with-face (format " %s" f)
+                                         'font-lock-comment-face))
 
       (insert "\n\n")
       )
@@ -433,14 +433,17 @@
 (defun ensime-search-highlight-matches (text start-pt)
   (let ((keywords (split-string ensime-search-text " ")))
     (dolist (key keywords)
-      (let ((start (string-match key text))
-	    (len (length key)))
-	(when (integerp start)
-	  (add-text-properties
-	   (+ start-pt start)
-	   (+ start-pt start len)
-	   '(comment nil face font-lock-keyword-face))))
-      )))
+      (let ((len (length key)))
+        (when (> len 0)
+          (let ((start (string-match key text)))
+            (while (integerp start)
+              (add-text-properties
+               (+ start-pt start)
+               (+ start-pt start len)
+               '(comment nil face font-lock-keyword-face))
+              (setq start (string-match key text (match-end 0))))
+            ))
+        ))))
 
 
 

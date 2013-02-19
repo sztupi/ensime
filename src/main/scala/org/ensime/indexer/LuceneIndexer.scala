@@ -115,7 +115,7 @@ object Tokens {
     var i = 0
     var k = 0
     while (i < nm.length) {
-      val c: Char = nm.charAt(i)
+      val c = nm.charAt(i)
       if ((c == ' ' || c == '.') && i != k) {
         tokens.append(nm.substring(k, i))
         tokens.append(" ")
