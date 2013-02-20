@@ -387,12 +387,12 @@ trait PIGIndex extends StringSimilarity {
               case PackageDef(pid, stats) => {
                 val node = tx.db.createNode()
                 node.setProperty(PropNodeType, NodeTypePackage)
-                val fullName = pid.qualifier.toString + "." + pid.name.decode
+                val fullName = pid.toString
                 node.setProperty(PropName, fullName)
                 node.setProperty(PropOffset, treeP.startOrPoint)
                 tokenStack.top += fullName.toLowerCase
                 node.createRelationshipTo(stack.top, RelContainedBy)
-                currentPackage = Some(pid.qualifier.toString)
+                currentPackage = Some(fullName)
                 descendWithContext(t, node)
                 currentPackage = None
               }
@@ -422,7 +422,7 @@ trait PIGIndex extends StringSimilarity {
                 node.createRelationshipTo(stack.top, RelContainedBy)
                 tpeIndex.add(
                   node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-                currentPackage.foreach{
+                currentPackage.foreach {
                   p => tpeIndex.add(node, PropQualNameTokens,
                     Tokens.tokenizeCamelCaseName(p + "." + localName))}
                 tokenStack.top += localName
