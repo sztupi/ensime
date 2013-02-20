@@ -28,14 +28,11 @@
 package org.ensime.server
 
 import java.io.File
-import org.ensime.indexer.Tokens
-import org.ensime.model.{
-  IndexSearchResult, SymbolSearchResult, TypeSearchResult}
+import org.ensime.indexer.{IndexProducers, Tokens}
+import org.ensime.model.{IndexSearchResult, SymbolSearchResult, TypeSearchResult}
 import org.ensime.util.{FileUtils, Profiling, StringSimilarity, Util}
 import org.neo4j.cypher.{ExecutionEngine, ExecutionResult}
-import org.neo4j.graphdb.{
-  DynamicRelationshipType, GraphDatabaseService,
-  Node, Relationship, Transaction}
+import org.neo4j.graphdb.{DynamicRelationshipType, GraphDatabaseService, Node, Transaction}
 import org.neo4j.graphdb.factory.GraphDatabaseFactory
 import org.neo4j.graphdb.index.{Index, IndexHits, IndexManager}
 import org.neo4j.helpers.collection.MapUtil
@@ -43,33 +40,10 @@ import scala.actors._
 import scala.actors.Actor._
 import scala.collection.{Iterable, JavaConversions}
 import scala.collection.immutable.IndexedSeq
-import scala.collection.mutable.{ArrayStack, HashMap, HashSet}
-import scala.tools.nsc.Settings
-import scala.tools.nsc.interactive.{CompilerControl, Global}
-import scala.tools.nsc.reporters.{Reporter, StoreReporter}
-import scala.tools.nsc.util.SourceFile
+import scala.collection.mutable.HashMap
 
-//class MyStandardAnalyzer extends Analyzer {
-//  private var actual =
-//    new StandardAnalyzer( Version.LUCENE_31, new java.util.HashSet[String]( Arrays.asList( "just", "some", "words" ) ) )
-//    override def tokenStream( fieldName: String, reader: Reader): TokenStream = {
-//        actual.tokenStream(fieldName, reader)
-//    }
-//}
-//
-//  Index<Node> index = nodeIndex( testname.getMethodName(), stringMap( "analyzer", MyStandardAnalyzer.class.getName() ) );
 
-class RoundRobin[T](items: IndexedSeq[T]) {
-  var i = 0
-  def next():T = {
-    val item = items(i)
-    i = (i + 1) % items.length
-    item
-  }
-  def foreach(action: T => Unit) = items.foreach(action)
-}
-
-trait PIGIndex extends StringSimilarity {
+trait PIGIndex extends StringSimilarity with IndexProducers {
 
   private val cache = new HashMap[(String, String), Int]
   def editDist(a: String, b: String): Int = {
@@ -133,9 +107,12 @@ trait PIGIndex extends StringSimilarity {
   protected def tpeIndex: Index[Node]
   protected def scopeIndex: Index[Node]
   protected def scalaLibraryJar: File
+  protected def projectRoot: File
+  protected def filterPredicate(qualifiedName:String):Boolean = true
 
   protected def createDefaultGraphDb =
-    (new GraphDatabaseFactory()).newEmbeddedDatabase("neo4j-db")
+    (new GraphDatabaseFactory()).newEmbeddedDatabase(
+      projectRoot.getPath + "/.ensime-neo4j-db")
 
   protected def createDefaultFileIndex(db: GraphDatabaseService) =
     db.index().forNodes("fileIndex")
@@ -156,7 +133,7 @@ trait PIGIndex extends StringSimilarity {
 
   protected def shutdown = { graphDb.shutdown }
 
-  private def doTx(f: DbInTransaction => Unit): Unit = {
+  protected def doTx(f: DbInTransaction => Unit): Unit = {
     val tx = DbInTransaction(graphDb, graphDb.beginTx())
     try {
       f(tx)
@@ -166,7 +143,7 @@ trait PIGIndex extends StringSimilarity {
     }
   }
 
-  private def executeQuery(
+  protected def executeQuery(
     db: GraphDatabaseService, q: String): ExecutionResult = {
     val engine = new ExecutionEngine(graphDb)
     engine.execute(q)
@@ -283,19 +260,19 @@ trait PIGIndex extends StringSimilarity {
     }.toSet
   }
 
-  private def findFileNodeByMd5(
+  protected def findFileNodeByMd5(
     db: GraphDatabaseService, md5: String): Option[FileNode] = {
     JavaConversions.iterableAsScalaIterable(
       fileIndex.get(PropMd5, md5)).headOption.map(FileNode.apply)
   }
 
-  private def findFileNodeByPath(
+  protected def findFileNodeByPath(
     db: GraphDatabaseService, path: String): Option[FileNode] = {
     JavaConversions.iterableAsScalaIterable(
       fileIndex.get(PropPath,path)).headOption.map(FileNode.apply)
   }
 
-  private def findOrCreateFileNode(tx: DbInTransaction, f: File): FileNode = {
+  protected def findOrCreateFileNode(tx: DbInTransaction, f: File): FileNode = {
     val fileNode = JavaConversions.iterableAsScalaIterable(
       fileIndex.get(PropPath, f.getAbsolutePath)).headOption
     fileNode match {
@@ -310,7 +287,7 @@ trait PIGIndex extends StringSimilarity {
     }
   }
 
-  private def purgeFileSubgraph(tx: DbInTransaction, fileNode: FileNode) = {
+  protected def purgeFileSubgraph(tx: DbInTransaction, fileNode: FileNode) = {
     // First remove the nodes from any indexes
     executeQuery(tx.db,
       s"""START n=node:fileIndex($PropPath='${fileNode.path}')
@@ -334,7 +311,7 @@ trait PIGIndex extends StringSimilarity {
     println(s"Purged ${result.queryStatistics.deletedNodes} nodes.")
   }
 
-  private def prepareFileForNewContents(
+  protected def prepareFileForNewContents(
     tx: DbInTransaction, fileNode: FileNode, md5:String): Node = {
     fileNode.md5.foreach { md5 =>
       // File had prior existence. Purge the file from the graph.
@@ -345,193 +322,6 @@ trait PIGIndex extends StringSimilarity {
     fileNode.setProperty(PropMd5, md5)
     fileIndex.add(fileNode, PropMd5, md5)
     fileNode
-  }
-
-  trait CompilerExtensions { self: Global =>
-    import scala.tools.nsc.symtab.Flags._
-    import scala.tools.nsc.util.RangePosition
-
-    // See mads379's 8480b638c785c504e09b4fb829acdb24117af0c2
-    def quickParse(source: SourceFile): Tree = {
-      import syntaxAnalyzer.UnitParser
-      new UnitParser(new CompilationUnit(source)).parse()
-    }
-
-    class TreeTraverser(fileNode: Node, tx: DbInTransaction)
-        extends Traverser {
-      // A stack of nodes corresponding to the syntactic nesting as we traverse
-      // the AST.
-      val stack = ArrayStack[Node]()
-      stack.push(fileNode)
-
-      // A stack of token blobs, to be indexed with the corresponding node.
-      val tokenStack = ArrayStack[HashSet[String]]()
-      tokenStack.push(HashSet[String]())
-
-      def descendWithContext(t: Tree, containingNode: Node) {
-        tokenStack.push(HashSet[String]())
-        stack.push(containingNode)
-        super.traverse(t)
-        stack.pop()
-        val tokens = tokenStack.pop()
-        scopeIndex.add(containingNode, PropNameTokens, tokens.mkString(" "))
-      }
-
-      var currentPackage: Option[String] = None
-
-      override def traverse(t: Tree) {
-        val treeP = t.pos
-        if (!treeP.isTransparent) {
-          try {
-            t match {
-              case PackageDef(pid, stats) => {
-                val node = tx.db.createNode()
-                node.setProperty(PropNodeType, NodeTypePackage)
-                val fullName = pid.toString
-                node.setProperty(PropName, fullName)
-                node.setProperty(PropOffset, treeP.startOrPoint)
-                tokenStack.top += fullName.toLowerCase
-                node.createRelationshipTo(stack.top, RelContainedBy)
-                currentPackage = Some(fullName)
-                descendWithContext(t, node)
-                currentPackage = None
-              }
-
-              case Import(expr, selectors) => {
-                for (impSel <- selectors) {
-                  val node = tx.db.createNode()
-                  node.setProperty(PropNodeType, NodeTypeImport)
-                  val importedName = impSel.name.decode
-                  node.setProperty(PropName, importedName)
-                  node.setProperty(PropOffset, treeP.startOrPoint)
-                  tokenStack.top + importedName
-                  node.createRelationshipTo(stack.top, RelContainedBy)
-                }
-              }
-
-              case ClassDef(mods, name, tparams, impl) => {
-                val localName = name.decode
-                val node = tx.db.createNode()
-                node.setProperty(PropNodeType, NodeTypeType)
-                node.setProperty(PropName, localName)
-                node.setProperty(PropDeclaredAs,
-                  if (mods.isTrait) "trait"
-                  else if (mods.isInterface) "interface"
-                  else "class")
-                node.setProperty(PropOffset, treeP.startOrPoint)
-                node.createRelationshipTo(stack.top, RelContainedBy)
-                tpeIndex.add(
-                  node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-                currentPackage.foreach {
-                  p => tpeIndex.add(node, PropQualNameTokens,
-                    Tokens.tokenizeCamelCaseName(p + "." + localName))}
-                tokenStack.top += localName
-                descendWithContext(t, node)
-              }
-
-              case ModuleDef(mods, name, impl) => {
-                val localName = name.decode
-                val node = tx.db.createNode()
-                node.setProperty(PropNodeType, NodeTypeType)
-                node.setProperty(PropName, name.decode)
-                node.setProperty(PropDeclaredAs, "object")
-                node.setProperty(PropOffset, treeP.startOrPoint)
-                node.createRelationshipTo(stack.top, RelContainedBy)
-                tpeIndex.add(
-                  node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-                currentPackage.foreach{
-                  p => tpeIndex.add(node, PropQualNameTokens,
-                    Tokens.tokenizeCamelCaseName(p + "." + localName))}
-                tokenStack.top += localName
-                descendWithContext(t, node)
-              }
-
-              case ValDef(mods, name, tpt, rhs) => {
-                val node = tx.db.createNode()
-                node.setProperty(PropNodeType, NodeTypeType)
-                node.setProperty(PropName, name.decode)
-                node.createRelationshipTo(stack.top, RelContainedBy)
-                node.setProperty(PropOffset, treeP.startOrPoint)
-                tokenStack.top += name.decode
-                val isField =
-                  stack.top.getProperty(PropNodeType) == NodeTypeType
-                if (mods.hasFlag(PARAM)) {
-                  node.setProperty(PropNodeType, NodeTypeParam)
-                  node.createRelationshipTo(stack.top, RelParamOf)
-                } else if (mods.hasFlag(MUTABLE) && !isField) {
-                  node.setProperty(PropNodeType, NodeTypeVarDef)
-                } else if (!isField) {
-                  node.setProperty(PropNodeType, NodeTypeValDef)
-                } else if (mods.hasFlag(MUTABLE) && isField) {
-                  node.setProperty(PropNodeType, NodeTypeVarField)
-                } else if (isField) {
-                  node.setProperty(PropNodeType, NodeTypeValField)
-                }
-                descendWithContext(t, node)
-              }
-
-              case DefDef(mods, name, tparams, vparamss, tpt, rhs) => {
-                val node = tx.db.createNode()
-                node.setProperty(PropNodeType, NodeTypeMethod)
-                node.setProperty(PropName, name.decode)
-                node.setProperty(PropOffset, treeP.startOrPoint)
-                node.createRelationshipTo(stack.top, RelContainedBy)
-                descendWithContext(t, node)
-              }
-
-              case TypeDef(mods, name, tparams, rhs) => {
-                tokenStack.top += name.decode
-                super.traverse(t)
-              }
-
-              case LabelDef(name, params, rhs) => {}
-
-              case Ident(name) => {
-                tokenStack.top += name.decode
-              }
-
-              case Select(qual, selector: Name) => {
-                tokenStack.top += selector.decode
-                super.traverse(t)
-              }
-
-              case _ => { super.traverse(t) }
-            }
-          }
-          catch{
-            case e : Throwable => {
-              System.err.println("Error in AST traverse:")
-              e.printStackTrace(System.err)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  case class Die()
-  case class ParseFile(f: File, md5: String)
-  class Worker(compiler:Global with CompilerExtensions) extends Actor {
-    def act() {
-      loop {
-        receive {
-          case ParseFile(f: File, md5: String) => {
-            doTx { tx =>
-              // Get existing file if present (contents may have been updated):
-              val fileNode = findOrCreateFileNode(tx, f)
-              prepareFileForNewContents(tx, fileNode, md5)
-              val sf = compiler.getSourceFile(f.getAbsolutePath())
-              println("Adding " + f)
-              val tree = compiler.quickParse(sf)
-              val traverser = new compiler.TreeTraverser(fileNode, tx)
-              traverser.traverse(tree)
-            }
-            reply(f)
-          }
-          case Die() => exit()
-        }
-      }
-    }
   }
 
   def unindex(files: Set[File]) {
@@ -552,12 +342,14 @@ trait PIGIndex extends StringSimilarity {
     val MaxCompilers = 5
     val MaxWorkers = 5
 
-    def newCompiler(): Global with CompilerExtensions = {
-      val settings = new Settings(Console.println)
-      settings.usejavacp.value = false
-      settings.classpath.value = scalaLibraryJar.getAbsolutePath
-      val reporter = new StoreReporter()
-      new Global(settings, reporter) with CompilerExtensions {}
+    class RoundRobin[T](items: IndexedSeq[T]) {
+      var i = 0
+      def next():T = {
+        val item = items(i)
+        i = (i + 1) % items.length
+        item
+      }
+      def foreach(action: T => Unit) = items.foreach(action)
     }
 
     val compilers = new RoundRobin(
@@ -565,9 +357,23 @@ trait PIGIndex extends StringSimilarity {
 
     val workers = new RoundRobin(
       (0 until MaxWorkers).map{i =>
-        val w = new Worker(compilers.next())
+        val w = new SourceParsingWorker(compilers.next())
         w.start()
       })
+
+    val bytecodeWorker = new BytecodeWorker(filterPredicate)
+    bytecodeWorker.start()
+
+    def workerForFile(f:File): Option[Actor] = {
+      if (f.getName.endsWith(".java") || f.getName.endsWith(".scala")) {
+        Some(workers.next())
+      } else if (f.getName.endsWith(".class") || f.getName.endsWith(".jar")) {
+        Some(bytecodeWorker)
+      } else {
+        System.err.println("PIG: Unrecognized file type: " + f)
+        None
+      }
+    }
 
     val futures = files.flatMap { f =>
       val md5 = FileUtils.md5(f)
@@ -582,7 +388,7 @@ trait PIGIndex extends StringSimilarity {
           None
         }
         // File contents not found.
-        case None => Some(workers.next() !! ParseFile(f, md5))
+        case None => workerForFile(f).map{ w => w !! ParseFile(f, md5) }
       }
     }
     val results = futures.map{f => f()}
@@ -590,10 +396,11 @@ trait PIGIndex extends StringSimilarity {
     workers.foreach { _ ! Die() }
   }
 
-  def indexDirectories(sourceRoots: Iterable[File]) {
+  def indexAll(files: Iterable[File]) {
     index(FileUtils.expandRecursively(
-      new File("."), sourceRoots, FileUtils.isValidSourceFile _).toSet)
+      projectRoot, files, {f:File => true}).toSet)
   }
+
 }
 
 object PIG extends PIGIndex {
@@ -602,12 +409,13 @@ object PIG extends PIGIndex {
   var tpeIndex: Index[Node] = createDefaultTypeIndex(graphDb)
   var scopeIndex: Index[Node] = createDefaultScopeIndex(graphDb)
   var scalaLibraryJar: File = new File("dist_2.10.0/lib/scala-library.jar")
+  var projectRoot: File = new File(".")
 
   def main(args: Array[String]) {
-    System.setProperty("actors.corePoolSize", "10")
+    System.setProperty("actors.corePoolSize", "20")
     System.setProperty("actors.maxPoolSize", "100")
     Profiling.time("Index all roots") {
-      indexDirectories(args.map(new File(_)))
+      indexAll(args.map(new File(_)))
     }
     Util.foreachInputLine { line =>
       val name = line

@@ -43,7 +43,8 @@ import java.util.zip._
 import java.io.{ File, InputStream, IOException }
 
 trait ClassHandler {
-  def onClass(name: String, location: String, flags: Int) {}
+  def onClass(qualName: String, localName:String, location: String, flags: Int) {}
+  def onClassEnd() {}
   def onMethod(className: String, name: String, location: String, flags: Int) {}
   def onField(className: String, name: String, location: String, flags: Int) {}
 }
@@ -58,9 +59,13 @@ private class PublicSymbolVisitor(location: File, handler: ClassHandler) extends
     signature: String,
     superName: String,
     interfaces: Array[String]) {
-    val nm = mapClassName(name)
-    currentClassName = Some(nm)
-    handler.onClass(nm, path, access)
+    val qualifiedName = mapClassName(name)
+    currentClassName = Some(qualifiedName)
+    handler.onClass(qualifiedName, localName(name), path, access)
+  }
+
+  override def visitEnd() {
+    handler.onClassEnd()
   }
 
   override def visitMethod(access: Int,
@@ -86,6 +91,18 @@ private class PublicSymbolVisitor(location: File, handler: ClassHandler) extends
   private def mapClassName(name: String): String = {
     if (name == null) ""
     else name.replaceAll("/", ".")
+  }
+
+  private def localName(name: String): String = {
+    if (name == null) ""
+    else {
+      val i = name.lastIndexOf('/')
+      if (i > -1 && i < name.length) {
+        name.substring(i)
+      } else {
+        name
+      }
+    }
   }
 }
 

@@ -359,7 +359,7 @@ object LuceneIndex extends StringSimilarity {
       var classCount = 0
       var methodCount = 0
       var validClass = false
-      override def onClass(name: String, location: String, flags: Int) {
+      override def onClass(name: String, localName:String, location: String, flags: Int) {
         val isPublic = ((flags & Opcodes.ACC_PUBLIC) != 0)
         validClass = (isPublic && isValidType(name) && include(name,
           includes, excludes))

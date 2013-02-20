@@ -65,9 +65,16 @@ class Indexer(
       throw new RuntimeException(
         "Indexer requires that the scala library jar be specified."))
 
-  override def createDefaultGraphDb =
-    (new GraphDatabaseFactory()).newEmbeddedDatabase(
-      config.root.getPath + "/.ensime-neo4j-db")
+  protected def projectRoot: File = config.root
+
+  override def filterPredicate(qualifiedName:String):Boolean = {
+    if (config.onlyIncludeInIndex.isEmpty ||
+      config.onlyIncludeInIndex.exists(_.findFirstIn(qualifiedName) != None)) {
+      config.excludeFromIndex.forall(_.findFirstIn(qualifiedName) == None)
+    } else {
+      false
+    }
+  }
 
   def act() {
     val factory = new GraphDatabaseFactory()
@@ -84,7 +91,10 @@ class Indexer(
           }
           case RebuildStaticIndexReq() => {
             Profiling.time("Index all source roots") {
-              indexDirectories(config.sourceRoots ++ config.referenceSourceRoots)
+              indexAll(
+                config.allFilesOnClasspath ++
+                  config.sourceRoots ++
+                  config.referenceSourceRoots)
             }
             project ! AsyncEvent(toWF(IndexerReadyEvent()))
           }
