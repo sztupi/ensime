@@ -45,9 +45,78 @@ package org.ensime.indexer {
     case class Die()
     case class ParseFile(f: File, md5: String)
 
-
-    class BytecodeWorker(namePred: (String => Boolean))
+    class BytecodeWorker(nameFilter: (String => Boolean))
         extends Actor {
+
+      class ClassVisitor(fileNode: FileNode, tx: DbInTransaction,
+        nameFilter: (String => Boolean))
+          extends ClassHandler {
+
+        def isValidType(s: String): Boolean = {
+          val i = s.indexOf("$")
+          i == -1 || (i == (s.length - 1))
+        }
+
+        def isValidMethod(s: String): Boolean = {
+          s.indexOf("$") == -1 && !s.equals("<init>") && !s.equals("this")
+        }
+
+        private def declaredAs(name: String, flags: Int) = {
+          if (name.endsWith("$")) "object"
+          else if ((flags & Opcodes.ACC_INTERFACE) != 0) "trait"
+          else "class"
+        }
+
+        var classCount = 0
+        var methodCount = 0
+        var currentClassNode: Option[Node] = None
+
+        override def onClass(
+          qualName: String, localName:String, location: String, flags: Int) {
+          val isPublic = ((flags & Opcodes.ACC_PUBLIC) != 0)
+          if (isPublic && isValidType(qualName) && nameFilter(qualName)) {
+
+            val packNode = PackageNode.create(
+              tx, qualName.substring(0, qualName.lastIndexOf(".")),
+              0, fileNode)
+
+            val node = tx.db.createNode()
+            node.setProperty(PropNodeType, NodeTypeType)
+            node.setProperty(PropName, localName)
+            node.setProperty(PropDeclaredAs, declaredAs(localName, flags))
+            node.createRelationshipTo(packNode, RelContainedBy)
+
+            tpeIndex.add(node, PropNameTokens,
+              Tokens.tokenizeCamelCaseName(localName))
+            tpeIndex.add(node, PropQualNameTokens,
+              Tokens.tokenizeCamelCaseName(qualName))
+
+            currentClassNode = Some(node)
+          }
+        }
+
+        override def onClassEnd() {
+          for (node <- currentClassNode) {
+            currentClassNode = None
+            classCount += 1
+          }
+        }
+
+        override def onMethod(className: String, name: String,
+          location: String, flags: Int) {
+          val isPublic = ((flags & Opcodes.ACC_PUBLIC) != 0)
+          if (isPublic && isValidMethod(name)) {
+            currentClassNode.map { classNode =>
+              val node = tx.db.createNode()
+              node.setProperty(PropNodeType, NodeTypeMethod)
+              node.setProperty(PropName, name)
+              node.createRelationshipTo(classNode, RelContainedBy)
+              methodCount += 1
+            }
+          }
+        }
+      }
+
       def act() {
         loop {
           receive {
@@ -56,76 +125,12 @@ package org.ensime.indexer {
                 println("Adding bytecode " + f)
                 val fileNode = findOrCreateFileNode(tx, f)
                 prepareFileForNewContents(tx, fileNode, md5)
-                val handler = new BytecodeFileHandler(fileNode, tx, namePred)
-                ClassIterator.findPublicSymbols(List(f), handler)
+                val visitor = new ClassVisitor(fileNode, tx, nameFilter)
+                ClassIterator.findPublicSymbols(List(f), visitor)
               }
               reply(f)
             }
             case Die() => exit()
-          }
-        }
-      }
-    }
-
-
-    class BytecodeFileHandler(fileNode: FileNode, tx: DbInTransaction,
-      namePred: (String => Boolean))
-        extends ClassHandler {
-
-      def isValidType(s: String): Boolean = {
-        val i = s.indexOf("$")
-        i == -1 || (i == (s.length - 1))
-      }
-
-      def isValidMethod(s: String): Boolean = {
-        s.indexOf("$") == -1 && !s.equals("<init>") && !s.equals("this")
-      }
-
-      private def declaredAs(name: String, flags: Int) = {
-        if (name.endsWith("$")) "object"
-        else if ((flags & Opcodes.ACC_INTERFACE) != 0) "trait"
-        else "class"
-      }
-
-      var classCount = 0
-      var methodCount = 0
-      var validClass = false
-      var currentClass: Option[Node] = None
-
-      override def onClass(
-        qualName: String, localName:String, location: String, flags: Int) {
-        val isPublic = ((flags & Opcodes.ACC_PUBLIC) != 0)
-        validClass = (isPublic && isValidType(qualName) && namePred(qualName))
-        if (validClass) {
-          println("Class: " + qualName)
-          val node = tx.db.createNode()
-          node.setProperty(PropNodeType, NodeTypeType)
-          node.setProperty(PropName, localName)
-          node.setProperty(PropDeclaredAs, declaredAs(localName, flags))
-          node.createRelationshipTo(fileNode, RelContainedBy)
-          tpeIndex.add(node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-          tpeIndex.add(node, PropQualNameTokens, Tokens.tokenizeCamelCaseName(qualName))
-          currentClass = Some(node)
-        }
-      }
-
-      override def onClassEnd() {
-        if (validClass) {
-          currentClass = None
-          classCount += 1
-        }
-      }
-
-      override def onMethod(className: String, name: String,
-        location: String, flags: Int) {
-        val isPublic = ((flags & Opcodes.ACC_PUBLIC) != 0)
-        if (isPublic && isValidMethod(name)) {
-          currentClass.map { classNode =>
-            val node = tx.db.createNode()
-            node.setProperty(PropNodeType, NodeTypeMethod)
-            node.setProperty(PropName, name)
-            node.createRelationshipTo(classNode, RelContainedBy)
-            methodCount += 1
           }
         }
       }

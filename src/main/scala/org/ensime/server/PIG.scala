@@ -93,6 +93,17 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
   case class SymbolNode(node: Node) extends AbstractSymbolNode {}
 
   case class PackageNode(node: Node) extends AbstractSymbolNode {}
+  object PackageNode {
+    def create(tx: DbInTransaction, name: String,
+      offset: Int, container: Node): PackageNode = {
+      val node = tx.db.createNode()
+      node.setProperty(PropNodeType, NodeTypePackage)
+      node.setProperty(PropName, name)
+      node.setProperty(PropOffset, offset)
+      node.createRelationshipTo(container, RelContainedBy)
+      PackageNode(node)
+    }
+  }
 
   case class FileNode(node: Node) extends RichNode {
     def path = node.getProperty(PropPath, "").asInstanceOf[String]

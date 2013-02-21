@@ -98,7 +98,7 @@ private class PublicSymbolVisitor(location: File, handler: ClassHandler) extends
     else {
       val i = name.lastIndexOf('/')
       if (i > -1 && i < name.length) {
-        name.substring(i)
+        name.substring(i + 1)
       } else {
         name
       }
