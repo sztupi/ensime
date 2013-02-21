@@ -31,6 +31,7 @@ import java.io.File
 import org.ensime.indexer.{IndexProducers, Tokens}
 import org.ensime.model.{IndexSearchResult, SymbolSearchResult, TypeSearchResult}
 import org.ensime.util.{FileUtils, Profiling, StringSimilarity, Util}
+import org.ensime.util.Util._
 import org.neo4j.cypher.{ExecutionEngine, ExecutionResult}
 import org.neo4j.graphdb.{DynamicRelationshipType, GraphDatabaseService, Node, Transaction}
 import org.neo4j.graphdb.factory.GraphDatabaseFactory
@@ -166,7 +167,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
     typeName:String,
     maxResults: Int,
     enclosingPackage: Option[String]
-  ): Iterable[TypeSearchResult] = {
+  ): List[TypeSearchResult] = {
     val keys = Tokens.splitTypeName(typeName).
       filter(!_.isEmpty).map(_.toLowerCase)
     val luceneQuery = keys.map("nameTokens:" + _).mkString(" OR ")
@@ -192,7 +193,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
         }
         case _ => None
       }
-    }.toIterable
+    }.toList.distinctBy{t => t.name}
 
     // Sort by edit distance of type name primarily, and
     // length of full name secondarily.
@@ -223,13 +224,13 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
         }
         case _ => None
       }
-    }.toIterable
+    }.toList
   }
 
   // Find all occurances of a particular token.
   def searchByKeywords(db: GraphDatabaseService,
     keysIn: List[String],
-    maxResults: Int): Iterable[IndexSearchResult] = {
+    maxResults: Int): List[IndexSearchResult] = {
     val keys = keysIn.filter(!_.isEmpty).map(_.toLowerCase)
     val luceneQuery = keys.map{ k => s"$PropQualNameTokens: $k*"}.mkString(" AND ")
     val result = executeQuery(
@@ -249,7 +250,8 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
         }
         case _ => None
       }
-    }.toIterable
+    }.toList.distinctBy{t => t.name}.sortWith {
+      (a, b) => a.name.length < b.name.length }
   }
 
   // Find all occurances of a particular token.
