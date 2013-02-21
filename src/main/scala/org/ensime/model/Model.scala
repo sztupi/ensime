@@ -126,6 +126,7 @@ case class PatchReplace(
 case class Breakpoint(pos: SourcePosition)
 case class BreakpointList(val active: List[Breakpoint], val pending: List[Breakpoint])
 
+case class OffsetRange(from: Int, to: Int)
 
 sealed trait DebugLocation {}
 

@@ -45,14 +45,20 @@ trait SwankProtocol extends Protocol {
   class ConnectionInfo {
     val pid = None
     val serverName: String = "ENSIME-ReferenceServer"
-    val protocolVersion: String = "0.8.3"
+    val protocolVersion: String = "0.8.6"
   }
 
   /**
-   * Protocol Version: 0.8.4
+   * Protocol Version: 0.8.6
    *
    * Protocol Change Log:
+   *   0.8.6
+   *     Add support for ranges to type-at-point, inspect-type-at-point,
+   *       type-by-name-at-point
    *   0.8.5
+   *     DebugLocation of type 'field now gets field name from :field, not from :name
+   *     The debug-to-string call now requires thread id
+   *   0.8.4
    *     Add local-name to SymbolInfo
    *   0.8.3
    *     Add debug-to-string call.
@@ -1175,7 +1181,7 @@ trait SwankProtocol extends Protocol {
        * Arguments:
        *   String:The local or qualified name of the type.
        *   String:A source filename.
-       *   Int:A character offset in the file.
+       *   Int or (Int, Int):A character offset (or range) in the file.a
        * Return:
        *   A TypeInfo
        * Example call:
@@ -1188,8 +1194,8 @@ trait SwankProtocol extends Protocol {
       case "swank:type-by-name-at-point" => {
         form match {
           case SExpList(head :: StringAtom(name) :: StringAtom(file) ::
-            IntAtom(point) :: body) => {
-            rpcTarget.rpcTypeByNameAtPoint(name, file, point, callId)
+            OffsetRangeExtractor(range) :: body) => {
+            rpcTarget.rpcTypeByNameAtPoint(name, file, range, callId)
           }
           case _ => oops
         }
@@ -1202,7 +1208,7 @@ trait SwankProtocol extends Protocol {
        *   Lookup type of thing at given position.
        * Arguments:
        *   String:A source filename.
-       *   Int:A character offset in the file.
+       *   Int or (Int, Int):A character offset (or range) in the file.
        * Return:
        *   A TypeInfo
        * Example call:
@@ -1214,8 +1220,9 @@ trait SwankProtocol extends Protocol {
        */
       case "swank:type-at-point" => {
         form match {
-          case SExpList(head :: StringAtom(file) :: IntAtom(point) :: body) => {
-            rpcTarget.rpcTypeAtPoint(file, point, callId)
+          case SExpList(head :: StringAtom(file) ::
+              OffsetRangeExtractor(range) :: body) => {
+            rpcTarget.rpcTypeAtPoint(file, range, callId)
           }
           case _ => oops
         }
@@ -1228,7 +1235,7 @@ trait SwankProtocol extends Protocol {
        *   Lookup detailed type of thing at given position.
        * Arguments:
        *   String:A source filename.
-       *   Int:A character offset in the file.
+       *   Int or (Int, Int):A character offset (or range) in the file.
        * Return:
        *   A TypeInspectInfo
        * Example call:
@@ -1241,8 +1248,9 @@ trait SwankProtocol extends Protocol {
        */
       case "swank:inspect-type-at-point" => {
         form match {
-          case SExpList(head :: StringAtom(file) :: IntAtom(point) :: body) => {
-            rpcTarget.rpcInspectTypeAtPoint(file, point, callId)
+          case SExpList(head :: StringAtom(file) ::
+              OffsetRangeExtractor(range) :: body) => {
+            rpcTarget.rpcInspectTypeAtPoint(file, range, callId)
           }
           case _ => oops
         }
@@ -1880,19 +1888,20 @@ trait SwankProtocol extends Protocol {
        *   Returns the result of calling toString on the value at the
        *   given location
        * Arguments:
+       *   String: The thread-id in which to call toString.
        *   DebugLocation: The location from which to load the value.
        * Return:
        *   A DebugValue
        * Example call:
-       *   (:swank-rpc (swank:debug-to-string (:type element
-       *    :object-id "23" :index 2)) 42)
+       *   (:swank-rpc (swank:debug-to-string "thread-2"
+       *    (:type element :object-id "23" :index 2)) 42)
        * Example return:
        *   (:return (:ok "A little lamb") 42)
        */
       case "swank:debug-to-string" => {
         form match {
-          case SExpList(head :: DebugLocationExtractor(loc) :: body) => {
-            rpcTarget.rpcDebugToString(loc, callId)
+          case SExpList(head :: StringAtom(threadId) :: DebugLocationExtractor(loc) :: body) => {
+            rpcTarget.rpcDebugToString(threadId.toLong, loc, callId)
           }
           case _ => oops
         }
@@ -2054,6 +2063,14 @@ trait SwankProtocol extends Protocol {
 
   import SExpConversion._
 
+  object OffsetRangeExtractor {
+    def unapply(sexp: SExp): Option[OffsetRange] = sexp match {
+      case IntAtom(a) => Some(OffsetRange(a, a))
+      case SExpList(IntAtom(a)::IntAtom(b)::Nil) => Some(OffsetRange(a, b))
+      case _ => None
+    }
+  }
+
   object DebugLocationExtractor {
     def unapply(sexp: SExpList): Option[DebugLocation] = {
       val m = sexp.toKeywordMap()
@@ -2065,8 +2082,8 @@ trait SwankProtocol extends Protocol {
 	}
 	case SymbolAtom("field") => {
 	  for(StringAtom(id) <- m.get(key(":object-id"));
-	    StringAtom(name) <- m.get(key(":name"))) yield {
-	    DebugObjectField(id.toLong, name)
+	    StringAtom(field) <- m.get(key(":field"))) yield {
+	    DebugObjectField(id.toLong, field)
 	  }
 	}
 	case SymbolAtom("element") => {
