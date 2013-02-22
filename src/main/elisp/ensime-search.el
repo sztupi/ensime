@@ -59,7 +59,7 @@
   "The minimum length a search must be
  before rpc call is placed..")
 
-(defvar ensime-search-max-results 50
+(defvar ensime-search-max-results 20
   "The max number of results to return per rpc call.")
 
 

@@ -43,7 +43,6 @@ import scala.collection.{Iterable, JavaConversions}
 import scala.collection.immutable.IndexedSeq
 import scala.collection.mutable.HashMap
 
-
 trait PIGIndex extends StringSimilarity with IndexProducers {
 
   private val cache = new HashMap[(String, String), Int]
@@ -52,10 +51,12 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
   }
 
   val PropName = "name"
+  val PropQualName = "qualName"
   val PropNameTokens = "nameTokens"
   val PropQualNameTokens = "qualNameTokens"
   val PropPath = "path"
   val PropMd5 = "md5"
+  val PropIsSource = "isSource"
   val PropNodeType = "nodeType"
   val PropOffset = "offset"
   val PropDeclaredAs = "declaredAs"
@@ -85,7 +86,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
 
   trait AbstractSymbolNode extends RichNode {
     def name = node.getProperty(PropName, "").asInstanceOf[String]
-    def localName = node.getProperty(PropName, "").asInstanceOf[String]
+    def qualifiedName = node.getProperty(PropQualName, "").asInstanceOf[String]
     def offset = node.getProperty(PropOffset, 0).asInstanceOf[Integer]
     def declaredAs =
       scala.Symbol(node.getProperty(PropDeclaredAs, "sym").asInstanceOf[String])
@@ -99,6 +100,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
       offset: Int, container: Node): PackageNode = {
       val node = tx.db.createNode()
       node.setProperty(PropNodeType, NodeTypePackage)
+      node.setProperty(PropQualName, name)
       node.setProperty(PropName, name)
       node.setProperty(PropOffset, offset)
       node.createRelationshipTo(container, RelContainedBy)
@@ -122,9 +124,11 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
   protected def projectRoot: File
   protected def filterPredicate(qualifiedName:String):Boolean = true
 
-  protected def createDefaultGraphDb =
-    (new GraphDatabaseFactory()).newEmbeddedDatabase(
-      projectRoot.getPath + "/.ensime-neo4j-db")
+  protected def createDefaultGraphDb = {
+    val path = projectRoot.getPath + "/.ensime-neo4j-db"
+    println("Connecting to index: " + path)
+    (new GraphDatabaseFactory()).newEmbeddedDatabase(path)
+  }
 
   protected def createDefaultFileIndex(db: GraphDatabaseService) =
     db.index().forNodes("fileIndex")
@@ -173,20 +177,20 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
     val luceneQuery = keys.map("nameTokens:" + _).mkString(" OR ")
     val result = executeQuery(
       db, s"""START n=node:tpeIndex('$luceneQuery')
-              MATCH n-[:containedBy*1..5]->x, n-[:containedBy*1..5]->y
-              WHERE x.nodeType='file' and y.nodeType='package'
-              RETURN n,x,y LIMIT $maxResults""")
+              MATCH n-[:containedBy*1..5]->x
+              WHERE x.nodeType='file'
+              RETURN n,x LIMIT $maxResults""")
     val candidates = result.flatMap { row =>
-      (row.get("n"), row.get("x"), row.get("y")) match {
-        case (Some(tpeNode:Node), Some(fileNode:Node), Some(packNode:Node)) => {
+      (row.get("n"), row.get("x")) match {
+        case (Some(tpeNode:Node), Some(fileNode:Node)) => {
           val tpe = SymbolNode(tpeNode)
           val file = FileNode(fileNode)
-          val pack = PackageNode(packNode)
           val result = TypeSearchResult(
-            pack.name + "." + tpe.name, tpe.localName, tpe.declaredAs,
+            tpe.qualifiedName, tpe.name, tpe.declaredAs,
             Some((file.path, tpe.offset)))
           enclosingPackage match {
-            case Some(requiredPack) if requiredPack == pack.name => Some(result)
+            case Some(requiredPack)
+                if tpe.qualifiedName.startsWith(requiredPack) => Some(result)
             case None => Some(result)
             case _ => None
           }
@@ -211,7 +215,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
     val luceneQuery = "nameTokens:" + name.toLowerCase
     val result = executeQuery(db, s"""START n=node:scopeIndex('$luceneQuery')
                     MATCH n-[:containedBy*1..5]->x
-                    WHERE x.nodeType='file'
+                    WHERE x.nodeType='file' and x.isSource=true
                     RETURN n,x LIMIT $maxResults""")
     result.flatMap { row =>
       (row.get("n"), row.get("x")) match {
@@ -219,7 +223,7 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
           val scope = SymbolNode(symNode)
           val file = FileNode(fileNode)
           Some(SymbolSearchResult(
-            scope.name, scope.localName, scope.declaredAs,
+            scope.qualifiedName, scope.name, scope.declaredAs,
             Some((file.path, scope.offset))))
         }
         case _ => None
@@ -235,23 +239,23 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
     val luceneQuery = keys.map{ k => s"$PropQualNameTokens: $k*"}.mkString(" AND ")
     val result = executeQuery(
       db, s"""START n=node:tpeIndex('$luceneQuery')
-              MATCH n-[:containedBy*1..5]->x, n-[:containedBy*1..5]->y
-              WHERE x.nodeType='file' and y.nodeType='package'
-              RETURN n,x,y LIMIT $maxResults""")
+              MATCH n-[:containedBy*1..5]->x
+              WHERE x.nodeType='file'
+              RETURN n,x ORDER BY x.isSource DESC LIMIT $maxResults""")
     result.flatMap { row =>
-      (row.get("n"), row.get("x"), row.get("y")) match {
-        case (Some(tpeNode:Node), Some(fileNode:Node), Some(packNode:Node)) => {
+      (row.get("n"), row.get("x")) match {
+        case (Some(tpeNode:Node), Some(fileNode:Node)) => {
           val sym = SymbolNode(tpeNode)
           val file = FileNode(fileNode)
-          val pack = PackageNode(packNode)
           Some(SymbolSearchResult(
-            pack.name + "." + sym.name, sym.localName, sym.declaredAs,
+            sym.qualifiedName, sym.name, sym.declaredAs,
             Some((file.path, sym.offset))))
         }
         case _ => None
       }
     }.toList.distinctBy{t => t.name}.sortWith {
-      (a, b) => a.name.length < b.name.length }
+      (a, b) => a.name.length < b.name.length
+    }
   }
 
   // Find all occurances of a particular token.
@@ -293,6 +297,9 @@ trait PIGIndex extends StringSimilarity with IndexProducers {
       case None => {
         val node = FileNode(tx.db.createNode())
         node.setProperty(PropPath, f.getAbsolutePath)
+        node.setProperty(PropIsSource,
+          f.getName.endsWith(".java") ||
+          f.getName.endsWith(".scala"))
         node.setProperty(PropNodeType, NodeTypeFile)
         fileIndex.putIfAbsent(node, PropPath, f.getAbsolutePath)
         node

@@ -49,6 +49,9 @@ trait IndexSearchResult {
   val localName: String
   val declaredAs: scala.Symbol
   val pos: Option[(String, Int)]
+  def path: Option[String] = pos.map(_._1)
+  def fromSource: Boolean =
+    path.map(p => p.endsWith(".scala") || p.endsWith(".java")).getOrElse(false)
 }
 
 case class SymbolSearchResult(

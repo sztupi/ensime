@@ -83,6 +83,7 @@ package org.ensime.indexer {
             val node = tx.db.createNode()
             node.setProperty(PropNodeType, NodeTypeType)
             node.setProperty(PropName, localName)
+            node.setProperty(PropQualName, qualName)
             node.setProperty(PropDeclaredAs, declaredAs(localName, flags))
             node.createRelationshipTo(packNode, RelContainedBy)
 
@@ -184,6 +185,10 @@ package org.ensime.indexer {
         val stack = ArrayStack[Node]()
         stack.push(fileNode)
 
+        // A special stack just for package names.
+        val packageStack = ArrayStack[String]()
+        def currentPackagePath = packageStack.reverse.mkString(".")
+
         // A stack of token blobs, to be indexed with the corresponding node.
         val tokenStack = ArrayStack[HashSet[String]]()
         tokenStack.push(HashSet[String]())
@@ -197,24 +202,18 @@ package org.ensime.indexer {
           scopeIndex.add(containingNode, PropNameTokens, tokens.mkString(" "))
         }
 
-        var currentPackage: Option[String] = None
-
         override def traverse(t: Tree) {
           val treeP = t.pos
           if (!treeP.isTransparent) {
             try {
               t match {
                 case PackageDef(pid, stats) => {
-                  val node = tx.db.createNode()
-                  node.setProperty(PropNodeType, NodeTypePackage)
-                  val fullName = pid.toString
-                  node.setProperty(PropName, fullName)
-                  node.setProperty(PropOffset, treeP.startOrPoint)
-                  tokenStack.top += fullName.toLowerCase
-                  node.createRelationshipTo(stack.top, RelContainedBy)
-                  currentPackage = Some(fullName)
-                  descendWithContext(t, node)
-                  currentPackage = None
+                  packageStack.push(pid.toString)
+                  val pack = PackageNode.create(
+                    tx, currentPackagePath, treeP.startOrPoint, stack.top)
+                  tokenStack.top += currentPackagePath.toLowerCase
+                  descendWithContext(t, pack)
+                  packageStack.pop()
                 }
 
                 case Import(expr, selectors) => {
@@ -231,9 +230,11 @@ package org.ensime.indexer {
 
                 case ClassDef(mods, name, tparams, impl) => {
                   val localName = name.decode
+                  val qualName = currentPackagePath + "." + localName
                   val node = tx.db.createNode()
                   node.setProperty(PropNodeType, NodeTypeType)
                   node.setProperty(PropName, localName)
+                  node.setProperty(PropQualName, qualName)
                   node.setProperty(PropDeclaredAs,
                     if (mods.isTrait) "trait"
                     else if (mods.isInterface) "interface"
@@ -242,26 +243,26 @@ package org.ensime.indexer {
                   node.createRelationshipTo(stack.top, RelContainedBy)
                   tpeIndex.add(
                     node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-                  currentPackage.foreach {
-                    p => tpeIndex.add(node, PropQualNameTokens,
-                      Tokens.tokenizeCamelCaseName(p + "." + localName))}
+                  tpeIndex.add(node, PropQualNameTokens,
+                    Tokens.tokenizeCamelCaseName(qualName))
                   tokenStack.top += localName
                   descendWithContext(t, node)
                 }
 
                 case ModuleDef(mods, name, impl) => {
-                  val localName = name.decode
+                  val localName = name.decode + "$"
+                  val qualName = currentPackagePath + "." + localName
                   val node = tx.db.createNode()
                   node.setProperty(PropNodeType, NodeTypeType)
-                  node.setProperty(PropName, name.decode)
+                  node.setProperty(PropName, localName)
+                  node.setProperty(PropQualName, qualName)
                   node.setProperty(PropDeclaredAs, "object")
                   node.setProperty(PropOffset, treeP.startOrPoint)
                   node.createRelationshipTo(stack.top, RelContainedBy)
                   tpeIndex.add(
                     node, PropNameTokens, Tokens.tokenizeCamelCaseName(localName))
-                  currentPackage.foreach{
-                    p => tpeIndex.add(node, PropQualNameTokens,
-                      Tokens.tokenizeCamelCaseName(p + "." + localName))}
+                  tpeIndex.add(node, PropQualNameTokens,
+                    Tokens.tokenizeCamelCaseName(qualName))
                   tokenStack.top += localName
                   descendWithContext(t, node)
                 }
