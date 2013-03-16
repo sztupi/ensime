@@ -42,6 +42,7 @@
 (require 'tooltip)
 (require 'pp)
 (require 'hideshow)
+(require 'flymake)
 (require 'font-lock)
 (require 'auto-complete)
 (require 'easymenu)
@@ -2907,6 +2908,7 @@ any buffer visiting the given file."
   (goto-char start)
   (command-execute 'set-mark-command)
   (goto-char end)
+  (setq deactivate-mark nil)
   (ensime-set-selection-overlay start end))
 
 (defun ensime-expand-selection (start end)
@@ -2933,7 +2935,7 @@ any buffer visiting the given file."
 (defun ensime-inspect-bytecode ()
   "Show the bytecode for the current method."
   (interactive)
-  (let ((bc (ensime-rpc-method-bytecode buffer-file-name (current-line))))
+  (let ((bc (ensime-rpc-method-bytecode buffer-file-name (ensime-current-line))))
     (if (not bc)
 	(message "Could not find bytecode.")
       (progn
