@@ -405,7 +405,7 @@ Do not show 'Writing..' message."
 	(add-hook 'find-file-hook 'ensime-run-find-file-hooks nil t)
 
         (add-hook 'ensime-source-buffer-saved-hook
-                  'ensime-typecheck-all)
+                  'ensime-typecheck-all-no-results)
 
         (add-hook 'ensime-source-buffer-saved-hook
                   'ensime-builder-track-changed-files t)
@@ -417,7 +417,7 @@ Do not show 'Writing..' message."
                   'ensime-sem-high-refresh-hook t)
 
         (add-hook 'ensime-source-buffer-loaded-hook
-                  'ensime-typecheck-all)
+                  'ensime-typecheck-all-no-results)
 
 
         (when ensime-tooltip-hints
@@ -436,7 +436,7 @@ Do not show 'Writing..' message."
       (remove-hook 'find-file-hook 'ensime-run-find-file-hooks t)
 
       (remove-hook 'ensime-source-buffer-saved-hook
-                   'ensime-typecheck-all)
+                   'ensime-typecheck-all-no-results)
 
       (remove-hook 'ensime-source-buffer-saved-hook
                    'ensime-builder-track-changed-files)
@@ -448,7 +448,7 @@ Do not show 'Writing..' message."
                    'ensime-sem-high-refresh-hook)
 
       (remove-hook 'ensime-source-buffer-loaded-hook
-                   'ensime-typecheck-all)
+                   'ensime-typecheck-all-no-results)
 
       (remove-hook 'tooltip-functions 'ensime-tooltip-handler)
       (make-local-variable 'track-mouse)
@@ -2708,14 +2708,19 @@ any buffer visiting the given file."
        buffer-file-name 'identity
        ))))
 
-(defun ensime-typecheck-all ()
+(defun ensime-typecheck-all-no-results ()
   "Send a request for re-typecheck of whole project to the ENSIME server.
    Current file is saved if it has unwritten modifications."
   (interactive)
-  (message "Checking entire project...")
   (if (buffer-modified-p) (ensime-write-buffer nil t))
-  (setf (ensime-awaiting-full-typecheck (ensime-connection)) t)
   (ensime-rpc-async-typecheck-all 'identity))
+
+(defun ensime-typecheck-all ()
+  "Re-typecheck the whole project, and shows the result on completion."
+  (interactive)
+  (message "Checking entire project...")
+  (setf (ensime-awaiting-full-typecheck (ensime-connection)) t)
+  (ensime-typecheck-all-no-results))
 
 (defun ensime-show-all-errors-and-warnings ()
   "Show a summary of all compilation notes."
