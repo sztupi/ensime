@@ -405,7 +405,7 @@ Do not show 'Writing..' message."
 	(add-hook 'find-file-hook 'ensime-run-find-file-hooks nil t)
 
         (add-hook 'ensime-source-buffer-saved-hook
-                  'ensime-typecheck-current-file)
+                  'ensime-typecheck-all)
 
         (add-hook 'ensime-source-buffer-saved-hook
                   'ensime-builder-track-changed-files t)
@@ -417,7 +417,7 @@ Do not show 'Writing..' message."
                   'ensime-sem-high-refresh-hook t)
 
         (add-hook 'ensime-source-buffer-loaded-hook
-                  'ensime-typecheck-current-file)
+                  'ensime-typecheck-all)
 
 
         (when ensime-tooltip-hints
@@ -436,7 +436,7 @@ Do not show 'Writing..' message."
       (remove-hook 'find-file-hook 'ensime-run-find-file-hooks t)
 
       (remove-hook 'ensime-source-buffer-saved-hook
-                   'ensime-typecheck-current-file)
+                   'ensime-typecheck-all)
 
       (remove-hook 'ensime-source-buffer-saved-hook
                    'ensime-builder-track-changed-files)
@@ -448,7 +448,7 @@ Do not show 'Writing..' message."
                    'ensime-sem-high-refresh-hook)
 
       (remove-hook 'ensime-source-buffer-loaded-hook
-                   'ensime-typecheck-current-file)
+                   'ensime-typecheck-all)
 
       (remove-hook 'tooltip-functions 'ensime-tooltip-handler)
       (make-local-variable 'track-mouse)
